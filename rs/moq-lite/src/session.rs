@@ -324,6 +324,19 @@ impl<S: web_transport_trait::Session> PendingSession<S> {
 	pub fn reject(self, code: u32, reason: &str) {
 		self.session.close(code, reason);
 	}
+
+	/// Reject the session with a Privacy Pass TokenChallenge.
+	///
+	/// The challenge bytes are base64url-encoded and included in the close reason.
+	/// The client can parse the reason to extract the challenge and acquire a token.
+	///
+	/// Format: `pp:<base64url(challenge)>`
+	pub fn reject_with_challenge(self, code: u32, challenge: &[u8]) {
+		use base64::Engine;
+		let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(challenge);
+		let reason = format!("pp:{}", encoded);
+		self.session.close(code, &reason);
+	}
 }
 
 // We use a wrapper type that is dyn-compatible to remove the generic bounds from Session.

@@ -1,106 +1,118 @@
 //! Complete Privacy Pass authentication client example.
 //!
-//! Demonstrates the full flow:
-//! 1. Get challenge from relay's /challenge endpoint
-//! 2. Request token from issuer
-//! 3. Connect with token in SETUP AuthorizationToken parameter
-//! 4. Establish a working MoQ session
+//! Demonstrates the full flow per draft-ietf-moq-privacy-pass-auth-01:
+//! 1. Connect without token
+//! 2. Get rejected with 0x2 Unauthorized + TokenChallenge
+//! 3. Parse challenge to get issuer name
+//! 4. Request token from issuer
+//! 5. Reconnect with token in SETUP AuthorizationToken parameter
 //!
 //! Usage:
-//!   cargo run -p moq-native --example pp_client -- <http_url> <quic_url> <namespace>
+//!   cargo run -p moq-native --example pp_client -- <moq_url>
 //!
 //! Example:
-//!   cargo run -p moq-native --example pp_client -- http://localhost:9080 https://localhost:9443 test/room
+//!   cargo run -p moq-native --example pp_client -- https://localhost:4443/test/room
 //!
 //! Requirements:
-//!   - moq-relay running with --pp-enabled and --web-http-listen
-//!   - For local dev, use --tls-disable-verify or --tls-generate=localhost
+//!   - moq-relay running with --pp-enabled and --auth-public=""
+//!   - For local dev, use --tls-generate=localhost
 
-use moq_privacypass::{IssuerClient, Operation, Scope};
-use serde::Deserialize;
-
-#[derive(Debug, Deserialize)]
-struct ChallengeResponse {
-	challenge: String,
-	#[allow(dead_code)]
-	token_key: String,
-	issuer: String,
-}
+use moq_privacypass::{IssuerClient, Operation, Scope, parse_challenge_from_reason};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
 	moq_native::Log::new(tracing::Level::DEBUG).init();
 
 	let args: Vec<String> = std::env::args().collect();
-	if args.len() < 4 {
-		eprintln!("Usage: {} <http_url> <quic_url> <namespace>", args[0]);
-		eprintln!("Example: {} http://localhost:9080 http://localhost:9443 test/room", args[0]);
+	if args.len() < 2 {
+		eprintln!("Usage: {} <moq_url>", args[0]);
+		eprintln!("Example: {} https://localhost:4443/test/room", args[0]);
 		eprintln!();
 		eprintln!("Start relay with:");
 		eprintln!("  cargo run -p moq-relay -- --pp-enabled --auth-public=\"\" \\");
-		eprintln!("    --tls-generate=localhost --web-http-listen=127.0.0.1:9080 \\");
-		eprintln!("    --server-bind=127.0.0.1:9443");
+		eprintln!("    --tls-generate=localhost --server-bind=127.0.0.1:4443");
 		std::process::exit(1);
 	}
 
-	let http_base = &args[1];
-	let quic_base = &args[2];
-	let namespace = &args[3];
-
-	let moq_url = format!("{}/{}", quic_base, namespace);
+	let moq_url = url::Url::parse(&args[1])?;
+	let namespace = moq_url.path().trim_start_matches('/');
 
 	tracing::info!("Privacy Pass MoQ Client");
-	tracing::info!("  HTTP endpoint: {}", http_base);
-	tracing::info!("  MoQ endpoint:  {}", moq_url);
-	tracing::info!("  Namespace:     {}", namespace);
+	tracing::info!("  URL: {}", moq_url);
+	tracing::info!("  Namespace: {}", namespace);
 
-	// Step 1: Get challenge from relay
-	tracing::info!("Step 1: Get challenge from relay");
+	// Create client with TLS verification disabled for local dev
+	let mut config = moq_native::ClientConfig::default();
+	config.tls.disable_verify = Some(true);
+	let client = config.init()?;
 
-	let http_client = reqwest::Client::new();
-	let challenge_url = format!("{}/challenge?path={}&op=subscribe", http_base, namespace);
-	tracing::debug!("  GET {}", challenge_url);
+	// Step 1: Try to connect without token - expect rejection with challenge
+	tracing::info!("Step 1: Connect without token (expect rejection)");
 
-	let resp: ChallengeResponse = http_client
-		.get(&challenge_url)
-		.send()
-		.await?
-		.error_for_status()?
-		.json()
-		.await?;
+	let origin = moq_lite::Origin::produce();
+	let connect_result = client
+		.connect_with_auth(moq_url.clone(), origin.consumer, None, None)
+		.await;
 
-	tracing::info!("  Issuer: {}", resp.issuer);
-	tracing::debug!("  Challenge: {}...", &resp.challenge[..40.min(resp.challenge.len())]);
+	// Step 2: Parse the TokenChallenge from the rejection
+	let (challenge, issuer) = match connect_result {
+		Ok(_) => {
+			tracing::warn!("Connection succeeded without token - Privacy Pass may not be enabled");
+			return Ok(());
+		}
+		Err(err) => {
+			let err_str = err.to_string();
+			tracing::debug!("Connection rejected: {}", err_str);
 
-	// Step 2: Request token from issuer
-	tracing::info!("Step 2: Request token from issuer ({})", resp.issuer);
+			// Try to parse challenge from the error
+			// The error should contain "pp:<base64>" in the reason
+			if let Some(start) = err_str.find("pp:") {
+				// Extract the pp:... portion
+				let reason = &err_str[start..];
+				// Find end (space, quote, or end of string)
+				let end = reason.find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
+					.unwrap_or(reason.len());
+				let challenge_str = &reason[..end];
 
-	let mut issuer_client = IssuerClient::with_issuer(&resp.issuer);
+				match parse_challenge_from_reason(challenge_str) {
+					Ok((challenge, issuer)) => {
+						tracing::info!("  Got TokenChallenge from issuer: {}", issuer);
+						(challenge, issuer)
+					}
+					Err(e) => {
+						anyhow::bail!("Failed to parse challenge: {} (reason: {})", e, challenge_str);
+					}
+				}
+			} else {
+				anyhow::bail!("Connection rejected without TokenChallenge: {}", err_str);
+			}
+		}
+	};
+
+	// Step 3: Request token from issuer
+	tracing::info!("Step 2: Request token from issuer ({})", issuer);
+
+	let mut issuer_client = IssuerClient::with_issuer(&issuer);
 	issuer_client.fetch_issuer_key().await?;
 
+	// Build scope from the challenge's origin_info
 	let scope = Scope::exact(Operation::Subscribe, namespace);
 	tracing::debug!("  Scope: {}", scope);
+	tracing::debug!("  Challenge issuer: {}", challenge.issuer_name());
 
 	let token = issuer_client.request_token(&scope).await?;
 	let token_bytes = token.encode()?;
 	tracing::info!("  Got token: {} bytes", token_bytes.len());
 
-	// Step 3: Connect to relay with token
-	tracing::info!("Step 3: Connect to relay with Privacy Pass token");
-
-	let mut config = moq_native::ClientConfig::default();
-	config.tls.disable_verify = Some(true); // For local dev with self-signed certs
-	let client = config.init()?;
+	// Step 4: Reconnect with token
+	tracing::info!("Step 3: Reconnect with Privacy Pass token");
 
 	let origin = moq_lite::Origin::produce();
-	let moq_url = url::Url::parse(&moq_url)?;
-
 	let session = client
 		.connect_with_auth(moq_url.clone(), origin.consumer, None, Some(token_bytes))
 		.await?;
 
 	tracing::info!("Connected! Session established with Privacy Pass auth");
-	tracing::info!("  URL: {}", moq_url);
 
 	// Keep session alive briefly to demonstrate it's working
 	tokio::select! {

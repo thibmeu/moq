@@ -104,6 +104,19 @@ impl Auth {
 		self.privacypass.as_ref()
 	}
 
+	/// Build a Privacy Pass TokenChallenge for the given path.
+	///
+	/// The challenge is serialized and can be sent in the rejection reason
+	/// so the client can acquire a token from the issuer.
+	pub fn build_pp_challenge(&self, path: &str) -> Option<Vec<u8>> {
+		let pp = self.privacypass.as_ref()?;
+		// Build a challenge for subscribe operation on this path
+		// TODO: Support different operations
+		let scope = moq_privacypass::Scope::exact(moq_privacypass::Operation::Subscribe, path);
+		let (challenge_bytes, _key_bytes) = pp.build_challenge(&scope);
+		Some(challenge_bytes)
+	}
+
 	/// Verify JWT token from URL, returning the claims if successful.
 	/// If no token is provided, falls back to public path if configured.
 	///
@@ -145,8 +158,8 @@ impl Auth {
 
 		let root = Path::new(path);
 
-		// Decode the token
-		let token = moq_privacypass::PrivateTokenAuth::decode_token_only(token_bytes)
+		// Decode the token (includes auth_scheme prefix)
+		let token = moq_privacypass::PrivateTokenAuth::decode(token_bytes)
 			.map_err(|e| AuthError::PrivacyPass(e.to_string()))?;
 
 		// For PP tokens, we grant full access to the path.

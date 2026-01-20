@@ -56,3 +56,27 @@ pub const DEFAULT_ISSUER: &str = "demo-pat.issuer.cloudflare.com";
 
 /// Well-known path for issuer directory.
 pub const ISSUER_DIRECTORY_PATH: &str = "/.well-known/private-token-issuer-directory";
+
+/// Privacy Pass challenge prefix in rejection reasons.
+pub const CHALLENGE_PREFIX: &str = "pp:";
+
+/// Parse a Privacy Pass TokenChallenge from a QUIC close reason.
+///
+/// The reason format is: `pp:<base64url(challenge)>`
+///
+/// Returns the parsed TokenChallenge and the issuer name for acquiring a token.
+pub fn parse_challenge_from_reason(reason: &str) -> Result<(privacypass::auth::authenticate::TokenChallenge, String)> {
+	let encoded = reason.strip_prefix(CHALLENGE_PREFIX).ok_or_else(|| {
+		Error::DecodeFailed("reason does not contain Privacy Pass challenge".to_string())
+	})?;
+
+	use base64::Engine;
+	let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+		.decode(encoded)
+		.map_err(|e| Error::DecodeFailed(format!("invalid base64: {e}")))?;
+
+	let challenge = deserialize_challenge(&bytes)?;
+	let issuer = challenge.issuer_name().to_string();
+
+	Ok((challenge, issuer))
+}

@@ -62,15 +62,24 @@ impl Connection {
 				Ok(token) => token,
 				Err(err) => {
 					tracing::debug!(%err, "Privacy Pass token verification failed");
-					pending.reject(ERROR_UNAUTHORIZED, "invalid authorization token");
+					// Reject with challenge so client can get a new token
+					if let Some(challenge) = self.auth.build_pp_challenge(&path) {
+						pending.reject_with_challenge(ERROR_UNAUTHORIZED, &challenge);
+					} else {
+						pending.reject(ERROR_UNAUTHORIZED, "invalid authorization token");
+					}
 					return Err(err.into());
 				}
 			}
 		} else if self.auth.has_privacypass() {
-			// Privacy Pass is enabled but no token provided - reject with Unauthorized
-			// Client should use /challenge endpoint to get a token
-			tracing::debug!("no authorization token, Privacy Pass required");
-			pending.reject(ERROR_UNAUTHORIZED, "authorization required");
+			// Privacy Pass is enabled but no token provided
+			// Reject with TokenChallenge so client can acquire a token from the issuer
+			tracing::debug!("no authorization token, sending TokenChallenge");
+			if let Some(challenge) = self.auth.build_pp_challenge(&path) {
+				pending.reject_with_challenge(ERROR_UNAUTHORIZED, &challenge);
+			} else {
+				pending.reject(ERROR_UNAUTHORIZED, "authorization required");
+			}
 			return Err(AuthError::ExpectedToken.into());
 		} else {
 			// No PP configured and no JWT - this shouldn't happen if auth is configured

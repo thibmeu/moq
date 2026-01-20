@@ -480,6 +480,20 @@ impl PendingRequest {
 			Self::IrohQuic(p) => p.reject(code, reason),
 		}
 	}
+
+	/// Reject the session with a Privacy Pass TokenChallenge.
+	///
+	/// The challenge is included in the close reason so the client can
+	/// parse it and acquire a token from the specified issuer.
+	pub fn reject_with_challenge(self, code: u32, challenge: &[u8]) {
+		match self {
+			Self::WebTransport(p) | Self::Quic(p) => p.reject_with_challenge(code, challenge),
+			#[cfg(feature = "iroh")]
+			Self::IrohWebTransport(p) => p.reject_with_challenge(code, challenge),
+			#[cfg(feature = "iroh")]
+			Self::IrohQuic(p) => p.reject_with_challenge(code, challenge),
+		}
+	}
 }
 
 /// A raw QUIC connection request without WebTransport framing.
