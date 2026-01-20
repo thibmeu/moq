@@ -37,21 +37,55 @@ Cluster arguments:
 
 ## Authentication
 
-The relay supports JWT-based authentication and authorization with path-based access control.
+The relay supports two authentication methods:
 
-For detailed authentication setup, including token generation and configuration examples, see:
-**[Authentication Documentation](../../docs/auth.md)**
+1. **JWT tokens** - Traditional signed tokens via URL query parameters
+2. **Privacy Pass** - Privacy-preserving tokens via [draft-ietf-moq-privacy-pass-auth](https://datatracker.ietf.org/doc/draft-ietf-moq-privacy-pass-auth/)
 
-Key features:
-- JWT tokens passed via query parameters (`?jwt=<token>`)
-- Path-based authorization with `root`, `pub`, and `sub` claims
-- Anonymous access support for public content
-- Symmetric key cryptography (HMAC-SHA256/384/512)
-- Asymmetric key cryptography (RSASSA-PKCS1-SHA256/384/512, RSASSA-PSS-SHA256/384/512, ECDSA-SHA256/384, EdDSA)
+For detailed JWT setup, see: **[Authentication Documentation](../../doc/concepts/authentication.md)**
 
-Quick example configuration in your `.toml` file:
+### JWT Authentication
 ```toml
 [auth]
 key = "dev/root.jwk"    # JWT signing key
 public = "anon"         # Allow anonymous access to /anon prefix
 ```
+
+### Privacy Pass Authentication
+
+Privacy Pass provides unlinkable tokens for privacy-preserving authorization.
+Clients connect, get rejected with a TokenChallenge, acquire a token from an issuer, then reconnect.
+
+**Quick Test** (uses Cloudflare's demo issuer - no attestation required):
+
+```bash
+# Terminal 1: Start relay with Privacy Pass enabled
+cargo run -p moq-relay -- \
+  --pp-enabled \
+  --tls-generate=localhost \
+  --server-bind=127.0.0.1:4443
+
+# Terminal 2: Run the example client
+cargo run -p moq-native --example pp_client -- \
+  https://127.0.0.1:4443/test/room
+```
+
+The client will:
+1. Connect without token → rejected with `TokenChallenge`
+2. Parse challenge to get issuer (`demo-pat.issuer.cloudflare.com`)
+3. Request token from issuer
+4. Reconnect with token → session established
+
+**Configuration:**
+```toml
+[privacypass]
+enabled = true
+# Optional: custom issuer (defaults to Cloudflare demo)
+# issuer = "your-issuer.example.com"
+# issuer_key = "path/to/issuer-public-key.pem"
+```
+
+**CLI flags:**
+- `--pp-enabled` - Enable Privacy Pass authentication
+- `--pp-issuer <HOST>` - Custom issuer hostname
+- `--pp-issuer-key <PATH>` - Path to issuer's public key (SPKI format)

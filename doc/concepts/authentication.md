@@ -1,16 +1,18 @@
 # Authentication
 
-[moq-relay](/rust/moq-relay) uses JWT tokens in the URL for authentication and authorization.
-This scopes sessions to a selected root path with additional rules for publishing and subscribing.
+[moq-relay](/rust/moq-relay) supports two authentication methods:
+1. **JWT tokens** in the URL for traditional authentication
+2. **Privacy Pass** for privacy-preserving authentication ([draft-ietf-moq-privacy-pass-auth](https://datatracker.ietf.org/doc/draft-ietf-moq-privacy-pass-auth/))
 
 Note that this authentication only applies when using the relay.
-The application is responsible for authentication when using [moq-lite](/rust/moq-lite) directly,
+The application is responsible for authentication when using [moq-lite](/rust/moq-lite) directly.
 
 
 ## Overview
 
 The authentication system supports:
 - **JWT-based authentication** with query parameter tokens
+- **Privacy Pass authentication** with unlinkable tokens (RFC 9577)
 - **Path-based authorization** with hierarchical permissions
 - **Symmetric key cryptography** (HMAC-SHA256/384/512)
 - **Asymmetric key cryptography** (RSASSA-PKCS1-SHA256/384/512, RSASSA-PSS-SHA256/384/512, ECDSA-SHA256/384, EdDSA)
@@ -141,4 +143,96 @@ We currently only support symmetric keys.
 # config.toml
 [auth]
 key = "root.jwk" # Path to the key we generated.
+```
+
+
+## Privacy Pass Authentication
+
+Privacy Pass provides privacy-preserving authorization using unlinkable tokens per [RFC 9577](https://www.rfc-editor.org/rfc/rfc9577.html).
+Unlike JWT, tokens cannot be linked across sessions, providing better privacy for users.
+
+### How It Works
+
+```
+Client                     Relay                        Issuer
+   |                         |                            |
+   |-- SETUP (no token) ---->|                            |
+   |<-- 0x2 + TokenChallenge |                            |
+   |                         |                            |
+   |-- POST /token-request ----------------------->|
+   |<-- TokenResponse -----------------------------|
+   |                         |                            |
+   |-- SETUP + Token ------->|                            |
+   |<-- SETUP OK ------------|                            |
+```
+
+1. Client connects without a token
+2. Relay rejects with `0x2 Unauthorized` + serialized `TokenChallenge`
+3. Client extracts issuer name from challenge
+4. Client requests token from issuer
+5. Client reconnects with token in SETUP `AuthorizationToken` parameter
+
+### Quick Test
+
+Uses Cloudflare's demo issuer (`demo-pat.issuer.cloudflare.com`) which requires no attestation:
+
+```bash
+# Terminal 1: Start relay with Privacy Pass
+cargo run -p moq-relay -- \
+  --pp-enabled \
+  --tls-generate=localhost \
+  --server-bind=127.0.0.1:4443
+
+# Terminal 2: Run the Privacy Pass client example
+cargo run -p moq-native --example pp_client -- \
+  https://127.0.0.1:4443/test/room
+```
+
+Expected output:
+```
+INFO  pp_client: Privacy Pass MoQ Client
+INFO  pp_client: Step 1: Connect without token (expect rejection)
+INFO  pp_client:   Got TokenChallenge from issuer: demo-pat.issuer.cloudflare.com
+INFO  pp_client: Step 2: Request token from issuer
+INFO  pp_client:   Got token: 357 bytes
+INFO  pp_client: Step 3: Reconnect with Privacy Pass token
+INFO  pp_client: Connected! Session established with Privacy Pass auth
+INFO  pp_client: Session stayed alive for 5 seconds, closing...
+```
+
+### Configuration
+
+**CLI flags:**
+```bash
+--pp-enabled              # Enable Privacy Pass authentication
+--pp-issuer <HOST>        # Custom issuer hostname (default: demo-pat.issuer.cloudflare.com)
+--pp-issuer-key <PATH>    # Path to issuer's public key (SPKI format, base64)
+```
+
+**TOML configuration:**
+```toml
+[privacypass]
+enabled = true
+# issuer = "your-issuer.example.com"      # Optional custom issuer
+# issuer_key = "path/to/issuer-key.pem"   # Optional: load key from file
+```
+
+### Token Types
+
+Currently supports publicly verifiable tokens (type `0x0002`, Blind RSA 2048-bit) per [RFC 9578](https://www.rfc-editor.org/rfc/rfc9578.html).
+
+### Combining with JWT
+
+Privacy Pass and JWT can coexist. The relay checks:
+1. JWT in URL query parameter (`?jwt=...`)
+2. Privacy Pass token in SETUP `AuthorizationToken` parameter
+3. Falls back to public path if configured
+
+```toml
+[auth]
+key = "root.jwk"      # JWT key for traditional auth
+public = "anon"       # Public prefix
+
+[privacypass]
+enabled = true        # Also accept Privacy Pass tokens
 ```
