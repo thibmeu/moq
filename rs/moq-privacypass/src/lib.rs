@@ -51,8 +51,8 @@ pub use scope::*;
 pub use token::*;
 pub use verifier::*;
 
-/// Default Privacy Pass issuer (Cloudflare test endpoint).
-pub const DEFAULT_ISSUER: &str = "pp-issuer-production.research.cloudflare.com";
+/// Default Privacy Pass issuer (Cloudflare demo endpoint - no attestation required).
+pub const DEFAULT_ISSUER: &str = "demo-pat.issuer.cloudflare.com";
 
 /// Well-known path for issuer directory.
 pub const ISSUER_DIRECTORY_PATH: &str = "/.well-known/private-token-issuer-directory";

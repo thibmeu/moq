@@ -194,3 +194,35 @@ mod tests {
 	// Integration tests would go here but require network access
 	// See tests/cloudflare.rs for integration tests
 }
+
+#[cfg(test)]
+mod integration_tests {
+	use super::*;
+	use crate::scope::Operation;
+
+	#[tokio::test]
+	async fn test_fetch_issuer_key() {
+		let mut client = IssuerClient::new();
+		let result = client.fetch_issuer_key().await;
+		assert!(result.is_ok(), "Failed to fetch issuer key: {:?}", result.err());
+		println!("Successfully fetched issuer key from Cloudflare demo issuer");
+	}
+
+	#[tokio::test]
+	async fn test_token_request_demo_issuer() {
+		let mut client = IssuerClient::new();
+		let scope = Scope::exact(Operation::Subscribe, "test/room");
+
+		// Demo issuer doesn't require attestation
+		let result = client.request_token(&scope).await;
+		println!("Token request result: {:?}", result);
+
+		assert!(result.is_ok(), "Token request failed: {:?}", result.err());
+		let token = result.unwrap();
+		let encoded = token.encode().expect("encode token");
+		println!("Got token: {} bytes", encoded.len());
+
+		// Verify token structure
+		assert!(!encoded.is_empty());
+	}
+}
