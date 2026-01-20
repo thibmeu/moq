@@ -55,5 +55,6 @@ web-transport-ws = { workspace = true, features = ["rustls-tls-webpki-roots"] }
 [dev-dependencies]
 anyhow = "1"
 bytes = "1"
+moq-privacypass = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 url = "2"

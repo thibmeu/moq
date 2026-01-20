@@ -208,15 +208,28 @@ impl Client {
 		publish: impl Into<Option<moq_lite::OriginConsumer>>,
 		subscribe: impl Into<Option<moq_lite::OriginProducer>>,
 	) -> anyhow::Result<moq_lite::Session> {
+		self.connect_with_auth(url, publish, subscribe, None).await
+	}
+
+	/// Establish a WebTransport/QUIC connection with optional Privacy Pass auth token.
+	///
+	/// The `auth_token` is included in the SETUP message's AuthorizationToken parameter (id=3).
+	pub async fn connect_with_auth(
+		&self,
+		url: Url,
+		publish: impl Into<Option<moq_lite::OriginConsumer>>,
+		subscribe: impl Into<Option<moq_lite::OriginProducer>>,
+		auth_token: Option<Vec<u8>>,
+	) -> anyhow::Result<moq_lite::Session> {
 		#[cfg(feature = "iroh")]
 		if crate::iroh::is_iroh_url(&url) {
 			let session = self.connect_iroh(url).await?;
-			let session = moq_lite::Session::connect(session, publish, subscribe).await?;
+			let session = moq_lite::Session::connect_with_auth(session, publish, subscribe, auth_token).await?;
 			return Ok(session);
 		}
 
 		let session = self.connect_quic(url).await?;
-		let session = moq_lite::Session::connect(session, publish, subscribe).await?;
+		let session = moq_lite::Session::connect_with_auth(session, publish, subscribe, auth_token).await?;
 		Ok(session)
 	}
 
