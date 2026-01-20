@@ -1,0 +1,30 @@
+[package]
+name = "moq-privacypass"
+description = "Privacy Pass authentication for Media over QUIC"
+authors = ["Thibault Meunier"]
+repository = "https://github.com/moq-dev/moq"
+license = "MIT OR Apache-2.0"
+
+version = "0.1.0"
+edition = "2024"
+
+keywords = ["quic", "webtransport", "media", "privacypass", "authentication"]
+categories = ["authentication", "network-programming", "web-programming"]
+
+[dependencies]
+async-trait = "0.1"
+base64 = "0.22"
+bytes = "1"
+privacypass = { git = "https://github.com/raphaelrobert/privacypass" }
+rand = "0.8"
+reqwest = { version = "0.12", features = ["json"], optional = true }
+serde = { workspace = true }
+sha2 = "0.10"
+thiserror = "2"
+tokio = { workspace = true, features = ["sync", "macros", "rt-multi-thread"] }
+typenum = "1"
+generic-array = "1"
+
+[features]
+default = ["client"]
+client = ["reqwest"]

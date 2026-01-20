@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use std::future::Future;
 use tower_http::cors::{Any, CorsLayer};
 
-use crate::{Auth, Cluster};
+use crate::{Auth, ChallengeParams, ChallengeResponse, Cluster, PrivacyPassAuth};
 
 #[derive(Debug, Deserialize)]
 struct Params {
@@ -74,6 +74,7 @@ pub struct HttpsConfig {
 
 pub struct WebState {
 	pub auth: Auth,
+	pub privacypass: Option<PrivacyPassAuth>,
 	pub cluster: Cluster,
 	pub tls_info: Arc<std::sync::RwLock<moq_native::ServerTlsInfo>>,
 	pub conn_id: AtomicU64,
@@ -93,6 +94,7 @@ impl Web {
 	pub async fn run(self) -> anyhow::Result<()> {
 		let app = Router::new()
 			.route("/certificate.sha256", get(serve_fingerprint))
+			.route("/challenge", get(serve_challenge))
 			.route("/announced", get(serve_announced))
 			.route("/announced/{*prefix}", get(serve_announced))
 			.route("/fetch/{*path}", get(serve_fetch));
@@ -166,6 +168,29 @@ async fn serve_fingerprint(State(state): State<Arc<WebState>>) -> String {
 		.clone()
 }
 
+/// Serve a Privacy Pass challenge for the given path and operation.
+///
+/// GET /challenge?path=<namespace>&op=<subscribe|publish|announce|fetch>
+///
+/// Returns a JSON response with:
+/// - challenge: base64-encoded TokenChallenge
+/// - token_key: base64-encoded issuer public key (SPKI format)
+/// - issuer: issuer hostname
+///
+/// The client should use this challenge to obtain a token from the issuer,
+/// then include the token in the SETUP message's AuthorizationToken parameter.
+async fn serve_challenge(
+	Query(params): Query<ChallengeParams>,
+	State(state): State<Arc<WebState>>,
+) -> axum::response::Result<axum::Json<ChallengeResponse>> {
+	let pp = state.privacypass.as_ref().ok_or(StatusCode::NOT_IMPLEMENTED)?;
+
+	let operation = params.operation().map_err(|_| StatusCode::BAD_REQUEST)?;
+	let response = pp.challenge_response(operation, &params.path);
+
+	Ok(axum::Json(response))
+}
+
 async fn serve_ws(
 	ws: WebSocketUpgrade,
 	Path(path): Path<String>,
@@ -174,6 +199,8 @@ async fn serve_ws(
 ) -> axum::response::Result<Response> {
 	let ws = ws.protocols(["webtransport"]);
 
+	// Note: Privacy Pass auth happens via SETUP AuthorizationToken parameter,
+	// not URL params. This check is for JWT only.
 	let token = state.auth.verify(&path, params.jwt.as_deref())?;
 	let publish = state.cluster.publisher(&token);
 	let subscribe = state.cluster.subscriber(&token);

@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 use std::{net, time::Duration};
 
+use moq_lite::coding::Bytes;
+
 use crate::crypto;
 #[cfg(feature = "iroh")]
 use crate::iroh::IrohQuicRequest;
@@ -368,6 +370,41 @@ impl Request {
 		Ok(session)
 	}
 
+	/// Accept the transport and parse CLIENT_SETUP, but don't complete the MoQ handshake.
+	///
+	/// This allows inspecting SETUP parameters (e.g., AuthorizationToken) before
+	/// deciding to accept or reject the session.
+	///
+	/// Use [`PendingRequest::accept`] to complete the handshake or
+	/// [`PendingRequest::reject`] to terminate with an error code.
+	pub async fn accept_setup(self) -> anyhow::Result<PendingRequest> {
+		let pending = match self {
+			Request::WebTransport(request) => {
+				let session = request.ok().await?;
+				let pending = Session::accept_setup(session).await?;
+				PendingRequest::WebTransport(pending)
+			}
+			Request::Quic(request) => {
+				let session = request.ok();
+				let pending = Session::accept_setup(session).await?;
+				PendingRequest::Quic(pending)
+			}
+			#[cfg(feature = "iroh")]
+			Request::IrohWebTransport(request) => {
+				let session = request.ok().await?;
+				let pending = Session::accept_setup(session).await?;
+				PendingRequest::IrohWebTransport(pending)
+			}
+			#[cfg(feature = "iroh")]
+			Request::IrohQuic(request) => {
+				let session = request.ok();
+				let pending = Session::accept_setup(session).await?;
+				PendingRequest::IrohQuic(pending)
+			}
+		};
+		Ok(pending)
+	}
+
 	/// Returns the URL provided by the client.
 	pub fn url(&self) -> Option<&Url> {
 		match self {
@@ -375,6 +412,72 @@ impl Request {
 			#[cfg(feature = "iroh")]
 			Request::IrohWebTransport(request) => Some(request.url()),
 			_ => None,
+		}
+	}
+}
+
+/// A pending session after CLIENT_SETUP is parsed but before SERVER_SETUP is sent.
+///
+/// Allows inspecting SETUP parameters before completing the handshake.
+pub enum PendingRequest {
+	WebTransport(moq_lite::PendingSession<web_transport_quinn::Session>),
+	Quic(moq_lite::PendingSession<web_transport_quinn::Session>),
+	#[cfg(feature = "iroh")]
+	IrohWebTransport(moq_lite::PendingSession<web_transport_iroh::Session>),
+	#[cfg(feature = "iroh")]
+	IrohQuic(moq_lite::PendingSession<web_transport_iroh::Session>),
+}
+
+impl PendingRequest {
+	/// Get the AuthorizationToken from SETUP parameters, if present.
+	pub fn authorization_token(&self) -> Option<Bytes> {
+		match self {
+			Self::WebTransport(p) | Self::Quic(p) => p.authorization_token(),
+			#[cfg(feature = "iroh")]
+			Self::IrohWebTransport(p) => p.authorization_token(),
+			#[cfg(feature = "iroh")]
+			Self::IrohQuic(p) => p.authorization_token(),
+		}
+	}
+
+	/// Get the raw SETUP parameters.
+	pub fn parameters(&self) -> &Bytes {
+		match self {
+			Self::WebTransport(p) | Self::Quic(p) => p.parameters(),
+			#[cfg(feature = "iroh")]
+			Self::IrohWebTransport(p) => p.parameters(),
+			#[cfg(feature = "iroh")]
+			Self::IrohQuic(p) => p.parameters(),
+		}
+	}
+
+	/// Complete the handshake and accept the session.
+	pub async fn accept(
+		self,
+		publish: impl Into<Option<moq_lite::OriginConsumer>>,
+		subscribe: impl Into<Option<moq_lite::OriginProducer>>,
+	) -> anyhow::Result<Session> {
+		let session = match self {
+			Self::WebTransport(p) | Self::Quic(p) => p.accept(publish, subscribe).await?,
+			#[cfg(feature = "iroh")]
+			Self::IrohWebTransport(p) => p.accept(publish, subscribe).await?,
+			#[cfg(feature = "iroh")]
+			Self::IrohQuic(p) => p.accept(publish, subscribe).await?,
+		};
+		Ok(session)
+	}
+
+	/// Reject the session with an error code.
+	///
+	/// Common codes:
+	/// - `0x2` (Unauthorized): Authentication required or failed
+	pub fn reject(self, code: u32, reason: &str) {
+		match self {
+			Self::WebTransport(p) | Self::Quic(p) => p.reject(code, reason),
+			#[cfg(feature = "iroh")]
+			Self::IrohWebTransport(p) => p.reject(code, reason),
+			#[cfg(feature = "iroh")]
+			Self::IrohQuic(p) => p.reject(code, reason),
 		}
 	}
 }

@@ -1,7 +1,7 @@
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 
-use crate::{AuthConfig, ClusterConfig, WebConfig};
+use crate::{AuthConfig, ClusterConfig, PrivacyPassConfig, WebConfig};
 
 #[derive(Parser, Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -25,10 +25,15 @@ pub struct Config {
 	#[serde(default)]
 	pub cluster: ClusterConfig,
 
-	/// Authentication configuration.
+	/// Authentication configuration (JWT).
 	#[command(flatten)]
 	#[serde(default)]
 	pub auth: AuthConfig,
+
+	/// Privacy Pass authentication configuration.
+	#[command(flatten)]
+	#[serde(default)]
+	pub privacypass: PrivacyPassConfig,
 
 	/// Optionally run a TCP HTTP/WebSocket server.
 	#[command(flatten)]

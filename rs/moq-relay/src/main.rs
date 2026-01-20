@@ -4,7 +4,7 @@
 //!
 //! Features:
 //! - Clustering: connect multiple relays for global distribution
-//! - Authentication: JWT-based access control via [`moq_token`]
+//! - Authentication: JWT and Privacy Pass access control
 //! - WebSocket fallback: for restrictive networks
 //! - HTTP API: health checks and metrics via [`Web`]
 
@@ -12,12 +12,14 @@ mod auth;
 mod cluster;
 mod config;
 mod connection;
+mod privacypass;
 mod web;
 
 pub use auth::*;
 pub use cluster::*;
 pub use config::*;
 pub use connection::*;
+pub use privacypass::*;
 pub use web::*;
 
 #[tokio::main]
@@ -43,7 +45,13 @@ async fn main() -> anyhow::Result<()> {
 		client.with_iroh(iroh);
 	}
 
-	let auth = config.auth.init()?;
+	let privacypass = config.privacypass.init().await?;
+
+	if privacypass.is_some() {
+		tracing::info!("Privacy Pass authentication enabled");
+	}
+
+	let auth = config.auth.init_with_pp(privacypass.clone())?;
 
 	let cluster = Cluster::new(config.cluster, client);
 	let cloned = cluster.clone();
@@ -53,6 +61,7 @@ async fn main() -> anyhow::Result<()> {
 	let web = Web::new(
 		WebState {
 			auth: auth.clone(),
+			privacypass: privacypass.clone(),
 			cluster: cluster.clone(),
 			tls_info: server.tls_info(),
 			conn_id: Default::default(),

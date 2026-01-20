@@ -24,13 +24,16 @@ iroh = ["moq-native/iroh"]
 anyhow = { version = "1", features = ["backtrace"] }
 axum = { version = "0.8", features = ["tokio", "ws"] }
 axum-server = { version = "0.8", features = ["tls-rustls"] }
+base64 = "0.22"
 bytes = "1"
 clap = { version = "4", features = ["derive"] }
 futures = "0.3"
 http-body = "1"
 moq-lite = { workspace = true, features = ["serde"] }
 moq-native = { workspace = true, features = ["aws-lc-rs"] }
+moq-privacypass = { workspace = true }
 moq-token = { workspace = true }
+privacypass = { git = "https://github.com/raphaelrobert/privacypass" }
 rustls = { version = "0.23", features = [
 	"aws-lc-rs",
 ], default-features = false }

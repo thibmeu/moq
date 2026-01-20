@@ -1,5 +1,7 @@
 use std::{future::Future, pin::Pin, sync::Arc};
 
+use bytes::Bytes;
+
 use crate::{
 	Error, OriginConsumer, OriginProducer,
 	coding::{self, Decode, Encode, Stream},
@@ -173,6 +175,138 @@ impl Session {
 	pub async fn closed(&self) -> Result<(), Error> {
 		let err = self.session.closed().await;
 		Err(Error::Transport(err))
+	}
+
+	/// Accept a connection and parse CLIENT_SETUP, but don't complete handshake yet.
+	///
+	/// This allows inspecting SETUP parameters (e.g., AuthorizationToken) before
+	/// deciding to accept or reject the session.
+	///
+	/// Use [`PendingSession::accept`] to complete the handshake or
+	/// [`PendingSession::reject`] to terminate with an error.
+	pub async fn accept_setup<S: web_transport_trait::Session>(session: S) -> Result<PendingSession<S>, Error> {
+		// Accept with an initial version; we'll switch to the negotiated version later
+		let stream = Stream::accept(&session, ()).await?;
+		let mut stream = stream;
+		let client: setup::Client = stream.reader.decode().await?;
+		tracing::trace!(?client, "received client setup");
+
+		// Choose the version to use
+		let version = client
+			.versions
+			.iter()
+			.find(|v| VERSIONS.contains(v))
+			.copied()
+			.ok_or_else(|| Error::Version(client.versions.clone(), VERSIONS.into()))?;
+
+		Ok(PendingSession {
+			session,
+			stream,
+			client,
+			version,
+		})
+	}
+}
+
+/// A pending session after CLIENT_SETUP has been received but before SERVER_SETUP is sent.
+///
+/// This allows inspecting SETUP parameters before completing the handshake.
+pub struct PendingSession<S: web_transport_trait::Session> {
+	session: S,
+	stream: Stream<S, ()>,
+	client: setup::Client,
+	version: coding::Version,
+}
+
+impl<S: web_transport_trait::Session> PendingSession<S> {
+	/// Get the negotiated protocol version.
+	pub fn version(&self) -> coding::Version {
+		self.version
+	}
+
+	/// Get the raw CLIENT_SETUP parameters as bytes.
+	///
+	/// These can be decoded using [`ietf::Parameters`] or [`lite::Parameters`]
+	/// depending on the negotiated version.
+	pub fn parameters(&self) -> &Bytes {
+		&self.client.parameters
+	}
+
+	/// Get the AuthorizationToken from SETUP parameters, if present.
+	///
+	/// This is a convenience method for Privacy Pass authentication.
+	pub fn authorization_token(&self) -> Option<Bytes> {
+		// Try to decode as IETF parameters first (more common)
+		if let Ok(params) = ietf::Parameters::decode(&mut self.client.parameters.clone(), ()) {
+			if let Some(token) = params.get_bytes(ietf::ParameterBytes::AuthorizationToken) {
+				return Some(Bytes::copy_from_slice(token));
+			}
+		}
+		None
+	}
+
+	/// Complete the handshake and accept the session.
+	pub async fn accept(
+		self,
+		publish: impl Into<Option<OriginConsumer>>,
+		subscribe: impl Into<Option<OriginProducer>>,
+	) -> Result<Session, Error> {
+		// Only encode parameters if we're using the IETF draft because it has max_request_id
+		let parameters =
+			if ietf::Version::try_from(self.version).is_ok() && self.client.kind == setup::ClientKind::Ietf14 {
+				let mut parameters = ietf::Parameters::default();
+				parameters.set_varint(ietf::ParameterVarInt::MaxRequestId, u32::MAX as u64);
+				parameters.set_bytes(ietf::ParameterBytes::Implementation, b"moq-lite-rs".to_vec());
+				parameters.encode_bytes(())
+			} else {
+				lite::Parameters::default().encode_bytes(())
+			};
+
+		let mut server = setup::Server {
+			version: self.version,
+			parameters,
+		};
+		tracing::trace!(?server, "sending server setup");
+
+		let mut stream = self.stream.with_version(self.client.kind.reply());
+		stream.writer.encode(&server).await?;
+
+		if let Ok(version) = lite::Version::try_from(self.version) {
+			let stream = stream.with_version(version);
+			lite::start(self.session.clone(), stream, publish.into(), subscribe.into(), version).await?;
+		} else if let Ok(version) = ietf::Version::try_from(self.version) {
+			// Decode the parameters to get the initial request ID.
+			let parameters = ietf::Parameters::decode(&mut server.parameters, version)?;
+			let request_id_max =
+				ietf::RequestId(parameters.get_varint(ietf::ParameterVarInt::MaxRequestId).unwrap_or(0));
+
+			let stream = stream.with_version(version);
+			ietf::start(
+				self.session.clone(),
+				stream,
+				request_id_max,
+				false,
+				publish.into(),
+				subscribe.into(),
+				version,
+			)
+			.await?;
+		} else {
+			// unreachable, but just in case
+			return Err(Error::Version(self.client.versions, VERSIONS.into()));
+		}
+
+		tracing::debug!(version = ?self.version, "connected");
+
+		Ok(Session::new(self.session))
+	}
+
+	/// Reject the session with an error code.
+	///
+	/// Common codes:
+	/// - `0x2` (Unauthorized): Authentication required or failed
+	pub fn reject(self, code: u32, reason: &str) {
+		self.session.close(code, reason);
 	}
 }
 
