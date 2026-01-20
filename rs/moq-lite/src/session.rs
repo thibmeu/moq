@@ -45,11 +45,27 @@ impl Session {
 		publish: impl Into<Option<OriginConsumer>>,
 		subscribe: impl Into<Option<OriginProducer>>,
 	) -> Result<Self, Error> {
+		Self::connect_with_auth(session, publish, subscribe, None).await
+	}
+
+	/// Perform the MoQ handshake as a client with optional authorization token.
+	///
+	/// The `auth_token` is included in the SETUP message's AuthorizationToken parameter.
+	/// This is used for Privacy Pass authentication.
+	pub async fn connect_with_auth<S: web_transport_trait::Session>(
+		session: S,
+		publish: impl Into<Option<OriginConsumer>>,
+		subscribe: impl Into<Option<OriginProducer>>,
+		auth_token: Option<Vec<u8>>,
+	) -> Result<Self, Error> {
 		let mut stream = Stream::open(&session, setup::ServerKind::Ietf14).await?;
 
 		let mut parameters = ietf::Parameters::default();
 		parameters.set_varint(ietf::ParameterVarInt::MaxRequestId, u32::MAX as u64);
 		parameters.set_bytes(ietf::ParameterBytes::Implementation, b"moq-lite-rs".to_vec());
+		if let Some(token) = auth_token {
+			parameters.set_bytes(ietf::ParameterBytes::AuthorizationToken, token);
+		}
 		let parameters = parameters.encode_bytes(());
 
 		let client = setup::Client {

@@ -28,3 +28,6 @@ generic-array = "1"
 [features]
 default = ["client"]
 client = ["reqwest"]
+
+[dev-dependencies]
+hex = "0.4"
